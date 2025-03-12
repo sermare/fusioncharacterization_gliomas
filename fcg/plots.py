@@ -4,12 +4,148 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-from scipy.stats import gaussian_kde, pearsonr, roc_curve, auc
+from scipy.stats import gaussian_kde, pearsonr
 import scipy.cluster.hierarchy as sch
 from matplotlib.colors import ListedColormap
 from collections import Counter
 import itertools
 from sklearn.metrics import confusion_matrix
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.colors import ListedColormap
+
+import colorsys
+import random
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.colors import ListedColormap
+import pandas as pd
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.colors import ListedColormap
+
+
+def plot_fusion_heatmap(final_df):
+    """
+    Plots a heatmap for fusion gene analysis across samples.
+
+    Parameters:
+        final_df (pd.DataFrame): DataFrame containing fusion gene data with categorical and numerical features.
+    """
+    # Create a copy of the dataframe
+    plot_df = final_df.copy()
+
+    # Store original categorical values for legend
+    histology_map = dict(enumerate(final_df["Histology"].astype("category").cat.categories))
+    tumor_map = dict(enumerate(final_df["Tumor"].astype("category").cat.categories))
+
+    # Convert categorical data to numerical codes
+    plot_df["Histology"] = plot_df["Histology"].astype("category").cat.codes
+    plot_df["Tumor"] = plot_df["Tumor"].astype("category").cat.codes
+    plot_df["patient"] = plot_df["patient"].astype("category").cat.codes
+
+    # Select features to visualize
+    features = ["Histology", "Tumor", "RNAseq_number", "STAR_clonal_in_sample", "Arriba_clonal_in_sample"]
+
+    # Prepare heatmap data
+    heatmap_data = plot_df.set_index(["SF#", "patient"])[features].T
+
+    # Define custom colormaps
+    histology_colors = sns.color_palette("Set1", n_colors=len(set(plot_df["Histology"])))
+    tumor_colors = sns.color_palette("Set2", n_colors=len(set(plot_df["Tumor"])))
+    colormaps = [ListedColormap(histology_colors), ListedColormap(tumor_colors), "PuRd", "Blues", "Oranges"]
+    feature_labels = ["Histology", "Tumor Type", "RNAseq \n Count", "STAR  \n Clonal Fusions", "Arriba \n Clonal Fusions"]
+
+    # Create figure with additional space for legends and colorbars
+    fig = plt.figure(figsize=(16, 9))  # Increased height to accommodate vertical colorbars
+    gs = GridSpec(nrows=6, ncols=3, width_ratios=[20, 1, 5], height_ratios=[1, 1, 1, 1, 1, 1], 
+                  wspace=0.1, hspace=0.0)
+
+    # Plot each feature row
+    ims = []  # Store image objects for later colorbar creation
+    for i in range(len(features)):
+        # Heatmap axis
+        ax = plt.subplot(gs[i, 0])
+        row_data = heatmap_data.iloc[i, :].values.reshape(1, -1)
+        
+        # Set vmin and vmax for each row
+        if i == 0:  # Histology
+            vmin, vmax = -0.5, len(set(plot_df["Histology"])) - 0.5
+        elif i == 1:  # Tumor Type
+            vmin, vmax = -0.5, len(set(plot_df["Tumor"])) - 0.5
+        else:  # Numerical features
+            vmin, vmax = heatmap_data.iloc[i].min(), heatmap_data.iloc[i].max()
+            avg = (vmin + vmax) / 2
+
+        # Create heatmap
+        im = ax.imshow(row_data, aspect='auto', cmap=colormaps[i], vmin=vmin, vmax=vmax)
+        if i >= 2:  # Store only numerical feature images for colorbars
+            ims.append(im)
+        
+        # Customize axes
+        ax.set_ylabel(feature_labels[i], rotation=0, labelpad=40, fontsize=12, ha='right')
+        ax.set_yticks([])
+        ax.set_xticks([])
+
+        # Add legends
+        if i == 0:  # Histology
+            legend_ax = plt.subplot(gs[i, 1:3])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=histology_colors[j], 
+                                 markersize=8, label=histology_map[j]) for j in histology_map]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=10, title='Histology', 
+                             title_fontsize=9, frameon=False, handletextpad=0.5, labelspacing=0.3, 
+                             borderaxespad=0, ncol=1)
+        elif i == 1:  # Tumor Type
+            legend_ax = plt.subplot(gs[i, 1:3])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='s', color='w', markerfacecolor=tumor_colors[j], 
+                                 markersize=8, label=tumor_map[j]) for j in tumor_map]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=10, title='Tumor Type', 
+                             title_fontsize=9, frameon=False, handletextpad=0.5, labelspacing=0.3, 
+                             borderaxespad=0, ncol=1)
+
+    # Add vertical colorbars below Tumor Type legend (using row 2 for colorbars)
+    cbar_ax = plt.subplot(gs[2, 2])  # Place colorbars in column 2, row 2 (below Tumor Type)
+    cbar_ax.axis('off')
+
+    # Generate colorbars for numerical features
+    vmin_vals = [heatmap_data.iloc[i].min() for i in range(2, len(features))]
+    vmax_vals = [heatmap_data.iloc[i].max() for i in range(2, len(features))]
+    avg_vals = [(vmin_vals[i] + vmax_vals[i]) / 2 for i in range(len(vmin_vals))]
+
+    # Increase height for colorbars
+    gs = GridSpec(nrows=6, ncols=3, width_ratios=[20, 1, 5], height_ratios=[1, 1, 1, 1, 0.1, 0.1], 
+                  wspace=0.0, hspace=0.0)
+
+    cbar_gs = GridSpecFromSubplotSpec(3, 2, subplot_spec=gs[2, 2], width_ratios=[0.6, 2], hspace=4, wspace=5)
+
+    for i, im in enumerate(ims):
+        cbar_ax = plt.subplot(cbar_gs[i, 0])
+        cbar = plt.colorbar(im, cax=cbar_ax, orientation='vertical', shrink=1.0, aspect=20)  # Taller + thinner
+        cbar.set_ticks([vmin_vals[i], avg_vals[i], vmax_vals[i]])
+        cbar.set_ticklabels([f"Min: {int(vmin_vals[i])}", f"Avg: {int(avg_vals[i])}", f"Max: {int(vmax_vals[i])}"])
+        cbar.ax.tick_params(labelsize=6)
+        cbar_ax.set_title(f"{feature_labels[i+2]}", fontsize=8, pad=2, rotation=0, va='bottom')
+
+    # Add title
+    plt.suptitle("Fusion Gene Analysis Across Samples", fontsize=16, y=1.02)
+
+    # Adjust layout
+    plt.tight_layout(pad=0.5)
+    plt.show()
+
+
 
 ###############################################################################
 # Basic Plotting Functions
@@ -416,7 +552,402 @@ def generate_clustermap(dfs, merged_df, patient_label, include_hal=False, figsiz
     plt.show()
     return fusion_matrix
 
+def create_patient_heatmap(merged_df):
+    """
+    Creates a heatmap visualization with categorical data and tumor purity bar plots.
+    
+    Parameters:
+    merged_df (pandas.DataFrame): Input DataFrame with 'Patient', 'join_key', 'Histology', 
+                                 'Tumor', 'STAR_clonal_in_sample', 'Arriba_clonal_in_sample',
+                                 and 'plot_purity' columns
+    """
+    # Add name column
+    merged_df['name'] = merged_df['Patient'] + merged_df['join_key']
+    plot_df = merged_df.copy()
 
-###############################################################################
-# End of Module
-###############################################################################
+    # Get unique categories
+    unique_histology = sorted(merged_df["Histology"].unique())
+    unique_tumor = sorted(merged_df["Tumor"].unique())
+    unique_patients = sorted(merged_df["Patient"].unique())
+
+    # Create consistent mappings
+    histology_map = {i: val for i, val in enumerate(unique_histology)}
+    tumor_map = {i: val for i, val in enumerate(unique_tumor)}
+    patient_map = {i: val for i, val in enumerate(unique_patients)}
+
+    # Reverse mappings for encoding
+    histology_code_map = {val: i for i, val in histology_map.items()}
+    tumor_code_map = {val: i for i, val in tumor_map.items()}
+    patient_code_map = {val: i for i, val in patient_map.items()}
+
+    # Convert categorical data to numerical codes
+    plot_df["Histology_code"] = plot_df["Histology"].map(histology_code_map)
+    plot_df["Tumor_code"] = plot_df["Tumor"].map(tumor_code_map)
+    plot_df["Patient_code"] = plot_df["Patient"].map(patient_code_map)
+
+    # Select features to visualize
+    features = ["Histology_code", "Tumor_code", "Patient_code", 
+                "STAR_clonal_in_sample", "Arriba_clonal_in_sample"]
+
+    # Prepare heatmap data
+    heatmap_data = plot_df.set_index(["name"])[features].T
+
+    # Adjust fusion values
+    def adjust_fusion_value(x):
+        return 20 if x >= 50 else min(x, 20)
+
+    for fusion_feature in ["STAR_clonal_in_sample", "Arriba_clonal_in_sample"]:
+        heatmap_data.loc[fusion_feature] = heatmap_data.loc[fusion_feature].apply(adjust_fusion_value)
+
+    # Define custom colormaps
+    histology_colors = sns.color_palette("Set1", n_colors=len(unique_histology))
+    tumor_colors = sns.color_palette("Set2", n_colors=len(unique_tumor))
+
+    # Generate patient colors
+    random.seed(42)
+    patient_colors = []
+    patient_color_dict = {}
+    for patient_code in range(len(unique_patients)):
+        hue = random.random()
+        saturation = random.uniform(0.3, 0.6)
+        lightness = random.uniform(0.4, 0.6)
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+        patient_color_dict[patient_code] = hex_color
+        patient_colors.append(hex_color)
+
+    # Colormaps for heatmap
+    patient_colormap = ListedColormap([patient_color_dict[i] for i in range(len(unique_patients))])
+    star_cmap = ListedColormap(plt.get_cmap("PuRd", 11)(range(11)) + ["black"])
+    arriba_cmap = ListedColormap(plt.get_cmap("Blues", 11)(range(11)) + ["black"])
+
+    colormaps = [ListedColormap(histology_colors), 
+                 ListedColormap(tumor_colors), 
+                 patient_colormap, 
+                 star_cmap, 
+                 arriba_cmap]
+
+    feature_labels = ["Histology", "Tumor Type", "Patient", 
+                     "STAR Clonal Fusions", "Arriba Clonal Fusions"]
+
+    # Create figure
+    fig = plt.figure(figsize=(24, 22))
+    gs = GridSpec(nrows=11, ncols=5, width_ratios=[20, 1, 5, 5, 5], 
+                 height_ratios=[0.5, 0.5, 0.5, 0.5, 0.5, 1, 1, 2, 0.5, 0.5, 0.5], 
+                 wspace=0.3, hspace=0.1)
+
+    # Plot heatmap rows
+    ims = []
+    for i in range(len(features)):
+        ax = plt.subplot(gs[i, 0])
+        row_data = heatmap_data.iloc[i, :].values.reshape(1, -1)
+        
+        vmin = -0.5 if i < 3 else 0
+        vmax = [len(unique_histology), len(unique_tumor), len(unique_patients), 20, 20][i] - (0.5 if i < 3 else 0)
+
+        im = ax.imshow(row_data, aspect='auto', cmap=colormaps[i], vmin=vmin, vmax=vmax, interpolation='none')
+        if i >= 3:
+            ims.append(im)
+        
+        num_columns = len(plot_df)
+        for j in range(num_columns + 1):
+            ax.vlines(j - 0.5, ymin=-0.5, ymax=0.5, color='black', linewidth=0.05)
+            
+        ax.set_ylabel(feature_labels[i], rotation=0, labelpad=50, fontsize=16, ha='right')
+        ax.set_yticks([])
+        ax.set_xticks([])
+
+        # Legends for categorical variables
+        if i == 0:  # Histology
+            legend_ax = plt.subplot(gs[i, 2:4])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=histology_colors[j], 
+                                markersize=12, label=histology_map[j]) for j in range(len(unique_histology))]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=14, title='Histology', 
+                           title_fontsize=16, frameon=False, handletextpad=0.5, labelspacing=0.7, 
+                           borderaxespad=0, ncol=1)
+        elif i == 1:  # Tumor Type
+            legend_ax = plt.subplot(gs[i, 2:4])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=tumor_colors[j], 
+                                markersize=12, label=tumor_map[j]) for j in range(len(unique_tumor))]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=14, title='Tumor Type', 
+                           title_fontsize=16, frameon=False, handletextpad=0.5, labelspacing=0.7, 
+                           borderaxespad=0, ncol=1)
+
+    # Patient legends
+    patient_info = {}
+    for idx, row in plot_df.drop_duplicates('Patient').iterrows():
+        patient_code = row['Patient_code']
+        patient_name = row['Patient']
+        histology_name = histology_map[row['Histology_code']]
+        patient_info[patient_code] = {'name': patient_name, 'histology': histology_name, 
+                                    'color': patient_color_dict[patient_code]}
+
+    histology_groups = {}
+    for patient_code, info in patient_info.items():
+        histology_groups.setdefault(info['histology'], []).append(patient_code)
+
+    histology_list = sorted(histology_groups.keys())
+    legend_gs = GridSpecFromSubplotSpec(len(histology_list), 1, 
+                                      subplot_spec=gs[2:7, 2:4], 
+                                      height_ratios=[1] * len(histology_list),
+                                      hspace=0.6)
+
+    for i, histology_type in enumerate(histology_list):
+        patients_in_group = sorted(histology_groups[histology_type])
+        legend_ax = plt.subplot(legend_gs[i, 0])
+        legend_ax.axis('off')
+        patches = [plt.Line2D([0], [0], marker='o', color='w', 
+                            markerfacecolor=patient_info[p]['color'], markersize=10, 
+                            label=patient_info[p]['name']) for p in patients_in_group]
+        ncols = min(4, len(patches))
+        legend_ax.legend(handles=patches, loc='center left', fontsize=11, 
+                       title=f'Patients with {histology_type}', title_fontsize=14,
+                       frameon=True, handletextpad=0.5, labelspacing=0.5,
+                       borderaxespad=0, ncol=ncols)
+
+    # Bar plot for purity (replacing line plot)
+    purity_bar_ax = plt.subplot(gs[5, 0])
+    purity_values = plot_df["plot_purity"].values
+    sample_indices = range(len(purity_values))
+    purity_bar_ax.bar(sample_indices, purity_values, color='darkred', alpha=0.7, width=1.0)
+    purity_bar_ax.set_xlim(-0.5, len(purity_values)-0.5)
+    purity_bar_ax.set_ylim(0, 1)
+    purity_bar_ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+    purity_bar_ax.set_yticklabels(['0', '0.25', '0.5', '0.75', '1.0'])
+    purity_bar_ax.tick_params(axis='y', labelsize=12)
+    purity_bar_ax.set_xticks([])
+    purity_bar_ax.grid(True, axis='y', linestyle='--', alpha=0.7)
+    purity_bar_ax.text(-0.1, 0.5, "Tumor Purity", transform=purity_bar_ax.transAxes,
+                      fontsize=16, ha='right', va='center', rotation=0)
+
+    # Colorbars for fusion features
+    cbar_gs = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs[8:11, 3:5], height_ratios=[1, 1], hspace=1)
+    for i, im in enumerate(ims):
+        cbar_ax = plt.subplot(cbar_gs[i, 0])
+        cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal', shrink=0.5, aspect=60)
+        cbar.set_ticks([0, 20])
+        cbar.set_ticklabels(["Min: 0", "≥20"])
+        cbar.ax.tick_params(labelsize=14)
+        cbar_ax.set_title(f"{feature_labels[i+3]}", fontsize=16, pad=15, rotation=0, va='bottom')
+
+    plt.tight_layout(pad=2.0)
+    plt.show()
+
+# Example usage:
+# create_patient_heatmap(merged)
+
+def plot_fusion_heatmap_with_patients(final_df):
+    """
+    Plots a heatmap for fusion gene analysis across samples, including histology, tumor type, 
+    patient data, and clonal fusion counts.
+
+    Parameters:
+        final_df (pd.DataFrame): DataFrame containing fusion gene data with 'SF#', 'Histology', 'Tumor', 'Patient', and numeric fusion metrics.
+    """
+    # Create a copy of the dataframe
+    plot_df = final_df.copy()
+
+    # Store original categorical values for legends
+    histology_map = dict(enumerate(final_df["Histology"].astype("category").cat.categories))
+    tumor_map = dict(enumerate(final_df["Tumor"].astype("category").cat.categories))
+    patient_map = dict(enumerate(final_df["Patient"].astype("category").cat.categories))
+
+    # Convert categorical data to numerical codes
+    plot_df["Histology"] = plot_df["Histology"].astype("category").cat.codes
+    plot_df["Tumor"] = plot_df["Tumor"].astype("category").cat.codes
+    plot_df["Patient"] = plot_df["Patient"].astype("category").cat.codes
+
+    # Select features to visualize
+    features = ["Histology", "Tumor", "Patient", "STAR_clonal_in_sample", "Arriba_clonal_in_sample"]
+
+    # Prepare heatmap data
+    heatmap_data = plot_df.set_index(["SF#"])[features].T
+
+    # Define custom colormaps
+    histology_colors = sns.color_palette("Set1", n_colors=len(set(plot_df["Histology"])))
+    tumor_colors = sns.color_palette("Set2", n_colors=len(set(plot_df["Tumor"])))
+    patient_colors = sns.color_palette("muted", n_colors=60)  # 60 unique colors for patients
+
+    colormaps = [ListedColormap(histology_colors), ListedColormap(tumor_colors), 
+                 ListedColormap(patient_colors), "PuRd", "Blues", "Oranges"]
+    feature_labels = ["Histology", "Tumor Type", "Patient", 
+                      "STAR Clonal Fusions", "Arriba Clonal Fusions"]
+
+    # Create figure
+    fig = plt.figure(figsize=(24, 20))
+    gs = GridSpec(nrows=8, ncols=4, width_ratios=[20, 5, 5, 5], height_ratios=[1, 1, 1, 1, 1, 1, 2, 2], 
+                  wspace=0.2, hspace=0.3)
+
+    ims = []
+    for i in range(len(features)):
+        ax = plt.subplot(gs[i, 0])
+        row_data = heatmap_data.iloc[i, :].values.reshape(1, -1)
+        
+        if i == 0:  
+            vmin, vmax = -0.5, len(set(plot_df["Histology"])) - 0.5
+        elif i == 1:  
+            vmin, vmax = -0.5, len(set(plot_df["Tumor"])) - 0.5
+        elif i == 2:  
+            vmin, vmax = -0.5, 59.5  # Updated to match 60 patients
+        else:  
+            vmin, vmax = heatmap_data.iloc[i].min(), heatmap_data.iloc[i].max()
+            avg = (vmin + vmax) / 2
+
+        im = ax.imshow(row_data, aspect='auto', cmap=colormaps[i], vmin=vmin,
+                       vmax=vmax, interpolation='none')
+        if i >= 3:
+            ims.append(im)
+        
+        num_columns = len(plot_df)
+        for j in range(num_columns + 1):
+            ax.vlines(j - 0.5, ymin=-0.5, ymax=0.5, color='black', linewidth=0.05)
+            
+        ax.set_ylabel(feature_labels[i], rotation=0, labelpad=50, fontsize=16, ha='right')
+        ax.set_yticks([])
+        ax.set_xticks([])
+
+        if i == 0:  # Histology
+            legend_ax = plt.subplot(gs[i, 1:3])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=histology_colors[j], 
+                                 markersize=12, label=histology_map[j]) for j in histology_map]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=14, title='Histology', 
+                            title_fontsize=16, frameon=False, handletextpad=0.5, labelspacing=0.7, 
+                            borderaxespad=0, ncol=1)
+        elif i == 1:  # Tumor Type
+            legend_ax = plt.subplot(gs[i, 1:3])
+            legend_ax.axis('off')
+            patches = [plt.Line2D([0], [0], marker='s', color='w', markerfacecolor=tumor_colors[j], 
+                                 markersize=12, label=tumor_map[j]) for j in tumor_map]
+            legend_ax.legend(handles=patches, loc='center left', fontsize=14, title='Tumor Type', 
+                            title_fontsize=16, frameon=False, handletextpad=0.5, labelspacing=0.7, 
+                            borderaxespad=0, ncol=1)
+
+    # Patient legend
+    patient_legend_ax = plt.subplot(gs[6, 1:4])
+    patient_legend_ax.axis('off')
+    patches = [plt.Line2D([0], [0], marker='^', color='w', markerfacecolor=patient_colors[j], 
+                         markersize=12, label=patient_map[j]) for j in patient_map]
+    patient_legend_ax.legend(handles=patches, loc='center left', fontsize=12, title='Patient', 
+                            title_fontsize=14, frameon=False, handletextpad=0.5, labelspacing=0.5, 
+                            borderaxespad=0, ncol=4)
+
+    # Colorbars
+    cbar_gs = GridSpecFromSubplotSpec(3, 1, subplot_spec=gs[7:9, 3], height_ratios=[0.5, 0.5, 0.5], hspace=2)
+
+    vmin_vals = [heatmap_data.iloc[i].min() for i in range(3, len(features))]
+    vmax_vals = [heatmap_data.iloc[i].max() for i in range(3, len(features))]
+    avg_vals = [(vmin_vals[i] + vmax_vals[i]) / 2 for i in range(len(vmin_vals))]
+
+    for i, im in enumerate(ims):
+        cbar_ax = plt.subplot(cbar_gs[i, 0])
+        cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal', shrink=0.5, aspect=60)
+        cbar.set_ticks([vmin_vals[i], avg_vals[i], vmax_vals[i]])
+        cbar.set_ticklabels([f"Min: {int(vmin_vals[i])}", f"Avg: {int(avg_vals[i])}", f"Max: {int(vmax_vals[i])}"])
+        cbar.ax.tick_params(labelsize=14)
+        cbar_ax.set_title(f"{feature_labels[i+3]}", fontsize=16, pad=15, rotation=0, va='bottom')
+
+    plt.suptitle("Fusion Gene Analysis Across Samples", fontsize=24, y=0.98)
+    plt.tight_layout(pad=2.0)
+    plt.show()
+
+
+import colorsys
+import random
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.colors import ListedColormap
+import pandas as pd
+
+def plot_fusion_scatter(merged):
+    """
+    Plots a scatter-based visualization (marplots) for fusion gene analysis across samples, 
+    including histology, tumor type, patient data, and clonal fusion counts.
+
+    Parameters:
+        merged (pd.DataFrame): DataFrame containing fusion gene data with 'Patient', 'join_key', 
+                               'Histology', 'Tumor', and numeric fusion metrics.
+    """
+    # Create a new unique name for indexing
+    merged['name'] = merged['Patient'] + merged['join_key']
+
+    # Create a copy of the dataframe
+    plot_df = merged.copy()
+
+    # Get unique categories
+    unique_histology = sorted(merged["Histology"].unique())
+    unique_tumor = sorted(merged["Tumor"].unique())
+    unique_patients = sorted(merged["Patient"].unique())
+
+    # Mapping categorical values
+    histology_map = {i: val for i, val in enumerate(unique_histology)}
+    tumor_map = {i: val for i, val in enumerate(unique_tumor)}
+    patient_map = {i: val for i, val in enumerate(unique_patients)}
+
+    # Reverse mappings for encoding
+    histology_code_map = {val: i for i, val in histology_map.items()}
+    tumor_code_map = {val: i for i, val in tumor_map.items()}
+    patient_code_map = {val: i for i, val in patient_map.items()}
+
+    # Convert categorical data to numerical codes consistently
+    plot_df["Histology_code"] = plot_df["Histology"].map(histology_code_map)
+    plot_df["Tumor_code"] = plot_df["Tumor"].map(tumor_code_map)
+    plot_df["Patient_code"] = plot_df["Patient"].map(patient_code_map)
+
+    # Select features to visualize
+    features = ["Histology_code", "Tumor_code", "Patient_code", "STAR_clonal_in_sample", "Arriba_clonal_in_sample"]
+    feature_labels = ["Histology", "Tumor Type", "Patient", "STAR Clonal Fusions", "Arriba Clonal Fusions"]
+
+    # Define colors for categorical variables
+    histology_colors = sns.color_palette("Set1", n_colors=len(unique_histology))
+    tumor_colors = sns.color_palette("Set2", n_colors=len(unique_tumor))
+    patient_colors = sns.color_palette("muted", n_colors=len(unique_patients))
+
+    # Define custom colormaps
+    colormaps = {
+        "Histology_code": histology_colors,
+        "Tumor_code": tumor_colors,
+        "Patient_code": patient_colors
+    }
+
+    # Create figure layout
+    fig = plt.figure(figsize=(24, 16))
+    gs = GridSpec(nrows=len(features), ncols=2, width_ratios=[20, 5], height_ratios=[1, 1, 1, 1, 1], wspace=0.3, hspace=0.5)
+
+    # Iterate through features and plot scatter (marplot)
+    for i, feature in enumerate(features):
+        ax = plt.subplot(gs[i, 0])
+
+        if feature in colormaps:  # Categorical features
+            scatter_colors = [colormaps[feature][code] for code in plot_df[feature]]
+            ax.scatter(range(len(plot_df)), plot_df[feature], c=scatter_colors, alpha=0.7, s=50)
+            ax.set_yticks(range(len(colormaps[feature])))
+            ax.set_yticklabels([histology_map.get(code, "") if feature == "Histology_code" else
+                                tumor_map.get(code, "") if feature == "Tumor_code" else
+                                patient_map.get(code, "")
+                                for code in range(len(colormaps[feature]))])
+        else:  # Numerical fusion features
+            ax.scatter(range(len(plot_df)), plot_df[feature], c='darkblue', alpha=0.7, s=50)
+            ax.set_yticks(np.linspace(plot_df[feature].min(), plot_df[feature].max(), num=5))
+
+        ax.set_xticks([])
+        ax.set_ylabel(feature_labels[i], fontsize=14, rotation=0, labelpad=50, ha='right')
+
+    # Add legends
+    legend_ax = plt.subplot(gs[:, 1])
+    legend_ax.axis('off')
+
+    histology_patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=histology_colors[j], 
+                                    markersize=10, label=histology_map[j]) for j in histology_map]
+    tumor_patches = [plt.Line2D([0], [0], marker='s', color='w', markerfacecolor=tumor_colors[j], 
+                                markersize=10, label=tumor_map[j]) for j in tumor_map]
+
+    legend_ax.legend(handles=histology_patches + tumor_patches, loc='center left', fontsize=12, title="Legend",
+                     title_fontsize=14, frameon=False, handletextpad=0.5, labelspacing=0.7, borderaxespad=0, ncol=1)
+
+    plt.suptitle("Fusion Gene Analysis - Scatter Plot Representation", fontsize=20)
+    plt.show()

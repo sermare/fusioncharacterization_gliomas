@@ -1,34 +1,35 @@
 # data_utils.py
 
-import pandas as pd
-import glob
-import re
-import math
-from collections import Counter
-from Bio.Seq import Seq
-import pyfaidx
-from kipoiseq import Interval
-import requests
-from functools import lru_cache
+from fcg.common_imports import *
 
 ########################################################################
 # Data Loading & Basic Cleaning
 ########################################################################
 
-def load_data_from_directory(directory, pattern="*_fusions.tsv"):
+def load_data_from_directory(directory, pattern="*fusions.tsv", column=-1):
     """
     Recursively load and concatenate files matching a glob pattern
-    from a given directory.
-    
+    from a given directory, adding a new column with the file path.
+
     Parameters:
         directory (str): The root directory where the files are located.
         pattern (str): The glob pattern to match file names (default: "*_fusions.tsv").
-    
+        column (int): The part of the file path to extract (default: last directory name).
+
     Returns:
         pandas.DataFrame: A concatenated DataFrame from all matched files.
     """
     file_paths = glob.glob(f"{directory}/**/{pattern}", recursive=True)
-    dfs = [pd.read_csv(fp, sep='\t') for fp in file_paths]
+    dfs = []
+    
+    for fp in file_paths:
+        try:
+            df = pd.read_csv(fp, sep='\t')
+            df['file_path'] = fp.split('/')[column].replace(f'{pattern}', '')
+            dfs.append(df)
+        except Exception as e:
+            print(f"Error processing {fp}: {e}")
+    
     return pd.concat(dfs, ignore_index=True)
 
 def preprocess_dataframe(df):
@@ -45,7 +46,120 @@ def preprocess_dataframe(df):
     df = df.drop_duplicates()
     # Additional cleaning steps (e.g., renaming columns, handling missing data)
     # can be added here.
+
     return df
+
+
+########################################################################
+# Helper functions for Annotations
+########################################################################
+
+def extract_p_number(input_string):
+
+    specific_mappings = {
+    'SF12069': 'P470',
+    'SF12054': 'P469',
+    'SF10968': 'P345',
+    'SF11056': 'P388',
+    'SF11064': 'P236'
+    }
+
+
+    match = re.search(r'P\d{3}', input_string)
+    if match:
+        return match.group()
+    
+    match = re.search(r'P\d{2}', input_string)
+    if match:
+        return match.group()
+    
+    for key in specific_mappings:
+        if key in input_string:
+            return specific_mappings[key]
+
+    match = re.search(r'SF\d{5}', input_string)
+    if match:
+        return match.group()
+    
+    return None
+
+def extract_sf_number(input_string):
+
+    match = re.search(r'SF\d{5}', input_string)
+    if match:
+        return match.group()
+    
+    return None
+
+def process_fusion_purity_data(final_df, purity_estimates):
+    """
+    Processes fusion data by extracting version numbers, constructing join keys, 
+    and merging with purity estimates.
+
+    Parameters:
+        final_df (pd.DataFrame): DataFrame containing fusion gene data with 'SF#' and 'file_path_y'.
+        purity_estimates (pd.DataFrame): DataFrame containing purity estimates with 'SF#unique'.
+
+    Returns:
+        pd.DataFrame: Merged and processed DataFrame.
+    """
+    
+    # Helper function to extract version from SF#unique
+    def extract_sf_unique_version(sf_unique_str):
+        """
+        Extracts version information from SF#unique column.
+        Example: 'SF4454v3' -> 'v3'; 'SF12827-v9-2' -> 'v9-2'
+        """
+        match = re.search(r'^SF\d+(.*)$', sf_unique_str)
+        if not match:
+            return None
+        remainder = match.group(1)
+        match2 = re.search(r'v[0-9A-Za-z-]+', remainder)
+        return match2.group(0) if match2 else None
+
+    # Extract version from SF#unique in purity_estimates
+    purity_estimates['version_extracted'] = purity_estimates['SF#unique'].astype(str).apply(extract_sf_unique_version)
+
+    # Helper function to extract version from file_path_y in final_df
+    def extract_file_path_version(fp):
+        """
+        Extracts version information from the file path.
+        Example: 'P533SF12827-V9_S290_' -> 'v9'
+        """
+        match = re.search(r'V(\d+(-\d+)?)', fp, flags=re.IGNORECASE)
+        return f"v{match.group(1)}" if match else None
+
+    # Extract version from file_path_y in final_df
+    final_df['version_candidate'] = final_df['file_path_y'].apply(extract_file_path_version)
+
+    # Construct a join key for merging
+    final_df['join_key'] = final_df['SF#'].astype(str) + final_df['version_candidate'].astype(str)
+    purity_estimates['join_key'] = purity_estimates['SF#'].astype(str) + purity_estimates['version_extracted'].astype(str)
+
+    # Remove specific patients from purity_estimates
+    purity_estimates = purity_estimates[~purity_estimates['Patient'].isin(['P516', 'P469'])]
+
+    # Merge the data
+    merged_df = pd.merge(
+        final_df,
+        purity_estimates,
+        on='join_key',
+        how='left',  # Keep all rows from final_df
+        suffixes=('', '_purity')
+    )
+
+    # Assign 'plot_purity' based on 'Histology'
+    merged_df['plot_purity'] = np.where(
+        merged_df['Histology'].isin(['GBM', 'Oligo']),  # Condition
+        merged_df['FACET_purity'],                      # Value if condition is True
+        merged_df['pyclone.IDH.purity']                 # Value if condition is False (Astro)
+    )
+
+    # Remove duplicates
+    merged_df = merged_df.drop_duplicates()
+
+    return merged_df
+
 
 ########################################################################
 # Sequence Processing & Entropy Calculation

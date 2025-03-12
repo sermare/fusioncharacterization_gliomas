@@ -23,14 +23,9 @@ import scipy.cluster.hierarchy as sch
 # ============================
 # Statistics and Machine Learning
 # ============================
-from scipy.stats import gaussian_kde, pearsonr, roc_curve, auc, chi2_contingency, ttest_ind, mannwhitneyu
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_curve, auc
+from scipy.stats import gaussian_kde, pearsonr, ttest_ind, mannwhitneyu
 
-# XGBoost classifier
-from xgboost import XGBClassifier
-
+# XGBoost classi
 # ============================
 # Bioinformatics & Sequence Handling
 # ============================
