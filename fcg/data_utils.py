@@ -50,6 +50,20 @@ def preprocess_dataframe(df):
     return df
 
 
+def process_tables(tables, table = 'arriba'):
+    tables['file_path'] = tables['file_path'].str.upper()
+
+    tables['patient'] = [extract_p_number(s) for s in  tables['file_path'] ]
+
+    tables['SF#'] = [extract_sf_number(s) for s in  tables['file_path'] ]
+
+    if table == 'arriba':
+        tables['fusion_gene'] = tables['#gene1'] + '/' + tables['gene2']
+        # return tables
+    else:
+        tables['fusion_gene'] = tables['#FusionName'].str.replace('--','/')
+    return tables
+
 ########################################################################
 # Helper functions for Annotations
 ########################################################################
