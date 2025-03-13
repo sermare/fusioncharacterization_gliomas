@@ -25,7 +25,7 @@ def load_data_from_directory(directory, pattern="*fusions.tsv", column=-1):
     for fp in file_paths:
         try:
             df = pd.read_csv(fp, sep='\t')
-            df['file_path'] = fp.split('/')[column].replace(f'{pattern}', '')
+            df['file_path'] = fp #.split('/')[column].replace(f'{pattern}', '')
             dfs.append(df)
         except Exception as e:
             print(f"Error processing {fp}: {e}")
