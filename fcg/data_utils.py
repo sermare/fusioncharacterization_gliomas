@@ -505,3 +505,108 @@ def label_p_or_q(chrom, coord, boundaries_dict):
     if boundary is None:
         return None
     return 'p' if coord < boundary else 'q'
+
+
+def get_final_df(arriba38, star38, metadata):
+    """
+    Processes input fusion dataframes (arriba38 and star38) along with metadata
+    and returns a final dataframe with fusion counts, normalized observations,
+    and additional patient/fusion information.
+
+    Parameters:
+        arriba38 (pd.DataFrame): DataFrame containing Arriba results.
+        star38 (pd.DataFrame): DataFrame containing STAR results.
+        metadata (pd.DataFrame): DataFrame containing metadata, must include columns 'SF#' and 'Histology'.
+
+    Returns:
+        final_df (pd.DataFrame): Processed DataFrame with the following columns:
+            - patient
+            - SF#
+            - fg_bk
+            - counts per algorithm (e.g., 'arriba_hg38', 'star_hg38')
+            - total_observed_multiple_files
+            - total_algorithms
+            - count_in_other_patients
+            - normalized_total_observed
+            - Histology (from metadata)
+    """
+    import pandas as pd
+
+    processed_data = []
+    dfs = {
+        'arriba_hg38': arriba38,
+        'star_hg38': star38, 
+    }
+
+    # Process each algorithm-specific dataframe
+    for algo_name, df in dfs.items():
+        # Step 1: Remove duplicate combinations of 'file_path' and 'fg_bk'
+        df_filtered = df[['file_path', 'fg_bk', 'patient', 'SF#']].drop_duplicates()
+
+        # Step 2: Group by 'patient', 'SF#', and 'fg_bk' to count unique 'file_path' occurrences
+        fusion_counts = df_filtered.groupby(['patient', 'SF#', 'fg_bk']).agg(
+            observed_multiple_files=('file_path', 'nunique'),
+            algorithm_count=('file_path', 'size')
+        ).reset_index()
+
+        # Add a column for the algorithm
+        fusion_counts['algorithm'] = algo_name
+
+        processed_data.append(fusion_counts)
+
+    # Step 3: Concatenate all processed data into a single DataFrame
+    combined_df = pd.concat(processed_data, ignore_index=True)
+
+    # Step 4: Pivot the table to have one column per algorithm
+    pivot_df = combined_df.pivot_table(
+        index=['patient', 'SF#', 'fg_bk'],
+        columns='algorithm',
+        values='algorithm_count',
+        fill_value=0
+    ).reset_index()
+
+    # Step 5: Calculate the total file_path count for each fusion across all algorithms
+    total_observed_multiple_files = combined_df.groupby(['patient', 'SF#', 'fg_bk'])['observed_multiple_files'].max().reset_index()
+
+    # Merge the pivot table with the total file_path count
+    final_df = pd.merge(pivot_df, total_observed_multiple_files, on=['patient', 'SF#', 'fg_bk'])
+
+    # Step 6: Add a column for the total number of algorithms a fusion was called in
+    final_df['total_algorithms'] = (final_df[list(dfs.keys())] > 0).sum(axis=1)
+
+    # Rename the 'observed_multiple_files' column for clarity
+    final_df = final_df.rename(columns={'observed_multiple_files': 'total_observed_multiple_files'})
+
+    # Step 7: Count how many times a fusion is found among other patients
+    fusion_across_patients = combined_df.groupby('fg_bk')['patient'].nunique().reset_index()
+    fusion_across_patients = fusion_across_patients.rename(columns={'patient': 'count_in_other_patients'})
+
+    # Add this count to the final DataFrame and adjust for the current patient
+    final_df = final_df.merge(fusion_across_patients, on='fg_bk', how='left')
+    final_df['count_in_other_patients'] = final_df['count_in_other_patients'] - 1  # Exclude the current patient
+
+    # Count samples per patient to help with normalization
+    count_samples_per_patient = (
+        final_df[['patient', 'SF#', 'total_observed_multiple_files']]
+        .groupby('SF#')
+        .max()
+        .reset_index()
+        .sort_values(by='total_observed_multiple_files', ascending=False)
+    )
+
+    merged_df = final_df.merge(count_samples_per_patient, on='SF#', suffixes=('', '_patient_total'))
+
+    # Normalize the total observed multiple files by the corresponding patient total
+    merged_df['normalized_total_observed'] = (
+        merged_df['total_observed_multiple_files'] / merged_df['total_observed_multiple_files_patient_total']
+    )
+
+    # Merge in the metadata (e.g., Histology) based on 'SF#' and remove duplicates
+    final_df = pd.merge(
+        merged_df,
+        metadata[['SF#', 'Histology']].drop_duplicates(),
+        on='SF#',
+        how='left'
+    ).drop_duplicates(['SF#', 'patient', 'fg_bk'])
+
+    return final_df

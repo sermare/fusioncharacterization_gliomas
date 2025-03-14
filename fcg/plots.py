@@ -12,6 +12,7 @@ from collections import Counter
 import itertools
 from sklearn.metrics import confusion_matrix
 from plotly.subplots import make_subplots
+from scipy.stats import gaussian_kde
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
@@ -1273,3 +1274,117 @@ def create_custom_clustermap(heatmap_data_sorted, merged, n_top=50, custom_palet
     
     plt.show()
     return g
+
+
+def plot_fusion_densities(final_df, chromosome_sizes, label):
+    """
+    Processes fusion entries from final_df and plots density curves
+    for test and negative entries using genomic coordinates.
+
+    Parameters:
+        final_df (pd.DataFrame): DataFrame containing fusion data.
+        metadata (pd.DataFrame): Metadata DataFrame (used here if needed for further customization).
+        chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (must have columns 'chrom' and 'end').
+
+    The function:
+        - Filters entries based on 'GTEX' and algorithm count columns.
+        - Computes chromosome offsets and global coordinates.
+        - Uses gaussian_kde to compute density curves per chromosome.
+        - Plots density curves for test and negative entries.
+    """
+
+    # Define entries from final_df
+    neg_entries = final_df['fg_bk'].unique()
+
+    # Process chromosome sizes and compute offsets
+    chr_lengths = chromosome_sizes.groupby('chrom')['end'].max().reset_index()
+    chr_order = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+    chr_lengths = chr_lengths[chr_lengths['chrom'].isin(chr_order)]
+    chr_lengths['chr_num'] = chr_lengths['chrom'].apply(
+        lambda x: (23 if x == 'chrX' else (24 if x == 'chrY' else int(x.replace('chr', ''))))
+    )
+    chr_lengths.sort_values('chr_num', inplace=True)
+    chr_lengths['cum_length'] = chr_lengths['end'].cumsum()
+    chr_lengths['offset'] = chr_lengths['cum_length'] - chr_lengths['end']
+    chrom2offset = dict(zip(chr_lengths['chrom'], chr_lengths['offset']))
+
+    # Define function to parse a genomic string and extract chromosome and midpoint
+    def parse_genomic_string(entry):
+        match = re.findall(r'(chr[0-9XY]+):(\d+)', entry)
+        if not match or len(match) < 1:
+            return None, None
+        chrom1, pos1 = match[0]
+        pos1 = int(pos1)
+        if len(match) == 1:
+            midpoint = pos1
+            chrom = chrom1
+        else:
+            chrom2, pos2 = match[1]
+            pos2 = int(pos2)
+            if chrom1 == chrom2:
+                midpoint = (pos1 + pos2) // 2
+                chrom = chrom1
+            else:
+                midpoint = pos1
+                chrom = chrom1
+        return chrom, midpoint
+
+    # Process negative entries
+    data_for_plot_neg = []
+    for entry in neg_entries:
+        chrom, midpoint = parse_genomic_string(entry)
+        if chrom is None:
+            continue
+        data_for_plot_neg.append([chrom, midpoint])
+    df_hits_neg = pd.DataFrame(data_for_plot_neg, columns=['chrom', 'pos'])
+    df_hits_neg = df_hits_neg[df_hits_neg['chrom'].isin(chrom2offset.keys())]
+    df_hits_neg['global_x'] = df_hits_neg.apply(lambda row: chrom2offset[row['chrom']] + row['pos'], axis=1)
+
+    # Setup plotting parameters
+    plt.figure(figsize=(20, 6))
+    colors = []
+    for i, chrom in enumerate(chr_lengths['chrom']):
+        color = 'blue' if i % 2 == 0 else 'darkblue'
+        colors.append((chrom, color))
+        
+    # Function to plot density for a given dataset (df_hits)
+    def plot_density(df_hits, color, label, alpha=0.7, scale_factor=1):
+        for chrom in sorted(df_hits['chrom'].unique()):
+            subset = df_hits[df_hits['chrom'] == chrom]
+            if len(subset) < 2:
+                continue
+            x_vals = subset['global_x'].values
+            try:
+                kde = gaussian_kde(x_vals, bw_method=0.2)
+                offset = chrom2offset[chrom]
+                chrom_length = chr_lengths[chr_lengths['chrom'] == chrom]['end'].values[0]
+                x_range = np.linspace(offset, offset + chrom_length, 1000)
+                density = kde(x_range)
+                scaled_density = density * scale_factor
+                plt.fill_between(
+                    x_range, scaled_density, color=color, alpha=alpha,
+                    label=label if chrom == sorted(df_hits['chrom'].unique())[0] else None
+                )
+                plt.plot(x_range, scaled_density, color='black', linewidth=0.5, alpha=0.7)
+            except Exception as e:
+                print(f"Skipping density plot for {chrom}: {e}")
+
+    plot_density(df_hits_neg, color='blue', label=label)
+
+    prev_end = 0
+    for i, row in chr_lengths.iterrows():
+        chr_end_global = row['offset'] + row['end']
+        plt.axvline(x=chr_end_global, linestyle='--', linewidth=0.5, color='gray')
+        midpoint = prev_end + (chr_end_global - prev_end) / 2
+        plt.text(midpoint, -0.05 * plt.ylim()[1], row['chrom'].replace('chr', ''),
+                horizontalalignment='center', verticalalignment='top', fontsize=15)
+        prev_end = chr_end_global
+
+    # Finalize and show the plot
+    # plt.xlabel("Global Genomic Position")
+    plt.yticks(fontsize=15)
+    plt.ylabel("Scaled Density", fontsize=15)
+    plt.title("Fusion Density Plot", fontsize=15)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
