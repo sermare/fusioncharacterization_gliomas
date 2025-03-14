@@ -1,5 +1,6 @@
 # plots.py
 
+import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -10,10 +11,13 @@ from matplotlib.colors import ListedColormap
 from collections import Counter
 import itertools
 from sklearn.metrics import confusion_matrix
+from plotly.subplots import make_subplots
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.colors import ListedColormap
+import plotly.graph_objects as go
+from itertools import cycle
 
 import colorsys
 import random
@@ -934,3 +938,338 @@ def plot_fusion_scatter(merged):
 
     plt.suptitle("Fusion Gene Analysis - Scatter Plot Representation", fontsize=20)
     plt.show()
+
+
+
+# Function to generate random muted colors
+def generate_muted_colors(n, seed=42):
+    random.seed(seed)
+    colors = []
+    for _ in range(n):
+        hue = random.random()  # Random position on the color wheel
+        saturation = random.uniform(0.3, 0.6)  # Muted saturation
+        lightness = random.uniform(0.4, 0.6)  # Medium lightness
+        
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+        colors.append(hex_color)
+    return colors
+
+def create_interactive_fusion_heatmap(merged):
+    # Create a copy of the dataframe
+    plot_df = merged.copy()
+    
+    # Get unique categories
+    unique_histology = sorted(plot_df["Histology"].unique())
+    unique_tumor = sorted(plot_df["Tumor"].unique())
+    unique_patients = sorted(plot_df["Patient"].unique())
+    
+    # Create consistent mappings
+    histology_code_map = {val: i for i, val in enumerate(unique_histology)}
+    tumor_code_map = {val: i for i, val in enumerate(unique_tumor)}
+    patient_code_map = {val: i for i, val in enumerate(unique_patients)}
+    
+    # Convert categorical data to numerical codes
+    plot_df["Histology_code"] = plot_df["Histology"].map(histology_code_map)
+    plot_df["Tumor_code"] = plot_df["Tumor"].map(tumor_code_map)
+    plot_df["Patient_code"] = plot_df["Patient"].map(patient_code_map)
+    
+    # Sort dataframe for better visualization
+    plot_df = plot_df.sort_values(by=["Histology", "Tumor", "Patient"])
+    
+    # Generate colors for categorical variables
+    histology_colors = ['#e41a1c', '#377eb8', '#4daf4a']  # Red, Blue, Green for GBM, Astro, Oligo
+    tumor_colors = ['#66c2a5', '#fc8d62']  # Teal, Orange for Primary, Recurrence
+    patient_colors = generate_muted_colors(len(unique_patients))
+    
+    # Create color mappings
+    patient_color_dict = {patient: color for patient, color in zip(unique_patients, patient_colors)}
+    
+    # Create interactive subplot figure with 6 rows
+    fig = make_subplots(
+        rows=6, 
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.02,
+        row_heights=[0.15, 0.15, 0.15, 0.15, 0.15, 0.25],
+        subplot_titles=("Histology", "Tumor Type", "Patient", 
+                        "STAR Clonal Fusions", "Arriba Clonal Fusions", "Tumor Purity")
+    )
+    
+    # Prepare heatmap data
+    x = list(range(len(plot_df)))
+    sample_names = plot_df["name"].tolist()
+    
+    # Add Histology heatmap
+    histology_z = plot_df["Histology_code"].values.reshape(1, -1)
+    fig.add_trace(go.Heatmap(
+        z=histology_z,
+        x=x,
+        y=["Histology"],
+        colorscale=[[i/len(unique_histology), color] for i, color in enumerate(histology_colors)],
+        showscale=False,
+        hoverinfo="text",
+        text=[[f"Sample: {sample}<br>Histology: {histology}" 
+               for sample, histology in zip(sample_names, plot_df["Histology"])]],
+        zmin=-0.5, 
+        zmax=len(unique_histology)-0.5
+    ), row=1, col=1)
+    
+    # Add Tumor Type heatmap
+    tumor_z = plot_df["Tumor_code"].values.reshape(1, -1)
+    fig.add_trace(go.Heatmap(
+        z=tumor_z,
+        x=x,
+        y=["Tumor Type"],
+        colorscale=[[i/len(unique_tumor), color] for i, color in enumerate(tumor_colors)],
+        showscale=False,
+        hoverinfo="text",
+        text=[[f"Sample: {sample}<br>Tumor Type: {tumor}" 
+               for sample, tumor in zip(sample_names, plot_df["Tumor"])]],
+        zmin=-0.5, 
+        zmax=len(unique_tumor)-0.5
+    ), row=2, col=1)
+    
+    # Add Patient heatmap with custom colors
+    patient_z = plot_df["Patient_code"].values.reshape(1, -1)
+    
+    # Create patient colorscale - need to normalize values between 0 and 1
+    patient_colorscale = []
+    for i, patient in enumerate(unique_patients):
+        normalized_val = i / (len(unique_patients) - 1) if len(unique_patients) > 1 else 0
+        patient_colorscale.append([normalized_val, patient_color_dict[patient]])
+    
+    fig.add_trace(go.Heatmap(
+        z=patient_z,
+        x=x,
+        y=["Patient"],
+        colorscale=patient_colorscale,
+        showscale=False,
+        hoverinfo="text",
+        text=[[f"Sample: {sample}<br>Patient: {patient}<br>Histology: {histology}" 
+               for sample, patient, histology in zip(
+                   sample_names, plot_df["Patient"], plot_df["Histology"])]],
+        zmin=-0.5, 
+        zmax=len(unique_patients)-0.5
+    ), row=3, col=1)
+    
+    # Add STAR Clonal Fusions heatmap
+    star_z = plot_df["STAR_clonal_in_sample"].values.reshape(1, -1)
+    fig.add_trace(go.Heatmap(
+        z=star_z,
+        x=x,
+        y=["STAR Fusions"],
+        colorscale="Purp",
+        showscale=True,
+        colorbar=dict(
+            title="STAR Fusions",
+            y=0.55,
+            len=0.15,
+            yanchor="middle"
+        ),
+        hoverinfo="text",
+        text=[[f"Sample: {sample}<br>Patient: {patient}<br>STAR Clonal Fusions: {value}" 
+               for sample, patient, value in zip(
+                   sample_names, plot_df["Patient"], plot_df["STAR_clonal_in_sample"])]],
+    ), row=4, col=1)
+    
+    # Add Arriba Clonal Fusions heatmap
+    arriba_z = plot_df["Arriba_clonal_in_sample"].values.reshape(1, -1)
+    fig.add_trace(go.Heatmap(
+        z=arriba_z,
+        x=x,
+        y=["Arriba Fusions"],
+        colorscale="Blues",
+        showscale=True,
+        colorbar=dict(
+            title="Arriba Fusions",
+            y=0.35,
+            len=0.15,
+            yanchor="middle"
+        ),
+        hoverinfo="text",
+        text=[[f"Sample: {sample}<br>Patient: {patient}<br>Arriba Clonal Fusions: {value}" 
+               for sample, patient, value in zip(
+                   sample_names, plot_df["Patient"], plot_df["Arriba_clonal_in_sample"])]],
+    ), row=5, col=1)
+    
+    # Add Tumor Purity scatter plot
+    purity_values = plot_df["plot_purity"].values
+    
+    fig.add_trace(go.Scatter(
+        x=x,
+        y=purity_values,
+        mode='lines+markers',
+        marker=dict(
+            color='darkred',
+            size=8
+        ),
+        line=dict(
+            color='darkred',
+            width=1.5
+        ),
+        name="Tumor Purity",
+        hoverinfo="text",
+        text=[f"Sample: {sample}<br>Patient: {patient}<br>Tumor Purity: {purity:.2f}" 
+              for sample, patient, purity in zip(
+                  sample_names, plot_df["Patient"], plot_df["plot_purity"])],
+    ), row=6, col=1)
+    
+    # Create legends for categorical variables
+    for i, histology in enumerate(unique_histology):
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(size=10, color=histology_colors[i]),
+            name=f"Histology: {histology}",
+            legendgroup="histology",
+            showlegend=True
+        ))
+    
+    for i, tumor in enumerate(unique_tumor):
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(size=10, color=tumor_colors[i]),
+            name=f"Tumor: {tumor}",
+            legendgroup="tumor",
+            showlegend=True
+        ))
+    
+    # Group patients by histology for better legend organization
+    histology_patients = {}
+    for idx, row in plot_df.drop_duplicates('Patient').iterrows():
+        histology = row['Histology']
+        patient = row['Patient']
+        if histology not in histology_patients:
+            histology_patients[histology] = []
+        histology_patients[histology].append(patient)
+    
+    # Add patient legends grouped by histology
+    for histology, patients in histology_patients.items():
+        for patient in sorted(patients):
+            fig.add_trace(go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=10, color=patient_color_dict[patient]),
+                name=f"{patient} ({histology})",
+                legendgroup=f"patients_{histology}",
+                legendgrouptitle=dict(text=f"Patients with {histology}"),
+                showlegend=True
+            ))
+    
+    # Customize layout
+    fig.update_layout(
+        title="Fusion Gene Analysis Across Patients with Purity Visualization",
+        height=900,
+        width=1200,
+        legend=dict(
+            groupclick="toggleitem",
+            tracegroupgap=5
+        ),
+        legend_title="Legend",
+        margin=dict(l=100, r=50, t=100, b=50),
+        xaxis6=dict(title="Samples"),
+        yaxis6=dict(title="Tumor Purity", range=[0, 1], tickvals=[0, 0.25, 0.5, 0.75, 1.0]),
+    )
+    
+    # Hide x-axes for all but the bottom plot
+    for i in range(1, 6):
+        fig.update_xaxes(visible=False, row=i, col=1)
+    
+    # Add horizontal grid lines to purity plot
+    fig.update_yaxes(gridcolor='lightgrey', gridwidth=0.5, zeroline=True, zerolinecolor='black', row=6, col=1)
+    
+    # Add vertical grid lines for sample alignment
+    fig.update_xaxes(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=0.5, row=6, col=1)
+    
+    return fig
+
+def create_custom_clustermap(heatmap_data_sorted, merged, n_top=50, custom_palette=None):
+    """
+    Create a clustermap with histology color annotations.
+    
+    Parameters:
+    -----------
+    heatmap_data_sorted : pandas.DataFrame
+        DataFrame with heatmap data. Columns are sample names that include SF numbers (e.g., "SF123").
+    merged : pandas.DataFrame
+        DataFrame with at least 'SF#' and 'Histology' columns for annotating the samples.
+    n_top : int, optional
+        Number of top rows from heatmap_data_sorted to use for clustering (default is 50).
+    custom_palette : dict, optional
+        A dictionary mapping histology types to colors. If None, a default palette is used 
+        (e.g., {"GBM": blue, "Astro": red, "Oligo": green}).
+        
+    Returns:
+    --------
+    g : sns.matrix.ClusterGrid
+        The seaborn clustermap object.
+    """
+    # Step 1: Extract SF numbers from sample names
+    def extract_sf(sample_name):
+        match = re.search(r'(SF\d+)', sample_name)
+        return match.group(1) if match else None
+
+    sf_mapping = {col: extract_sf(col) for col in heatmap_data_sorted.columns}
+    sf_df = pd.DataFrame(list(sf_mapping.items()), columns=['Sample', 'SF#'])
+    
+    # Step 2: Merge with histology info without duplicates
+    sf_histology = merged[['SF#', 'Histology']].drop_duplicates(subset=['SF#'])
+    sf_df = sf_df.merge(sf_histology, on='SF#', how='left')
+    
+    # Step 3: Create a color annotation for histology
+    if custom_palette is None:
+        # Use the "Set1" palette with 3 colors as defaults
+        set1_palette = sns.color_palette("Set1", n_colors=3)
+        # Manually assign colors: Blue for GBM, Red for Astro, Green for Oligo.
+        custom_palette = {
+            "GBM": set1_palette[1],
+            "Astro": set1_palette[0],
+            "Oligo": set1_palette[2]
+        }
+    
+    # Create a list of colors (one per sample) based on histology
+    col_colors = []
+    for sample in heatmap_data_sorted.columns:
+        row = sf_df[sf_df['Sample'] == sample]
+        if not row.empty and pd.notnull(row['Histology'].iloc[0]):
+            hist = row['Histology'].iloc[0]
+            # Use the provided palette; default to grey if histology not found
+            col_colors.append(custom_palette.get(hist, 'grey'))
+        else:
+            col_colors.append('grey')
+    
+    # Step 4: Compute column linkage for ordering using the top n_top rows
+    col_linkage = sch.linkage(heatmap_data_sorted.head(n_top).T, method='ward')
+    
+    # Step 5: Create the clustermap
+    g = sns.clustermap(
+        heatmap_data_sorted.head(n_top),
+        cmap="viridis",
+        linewidths=0,
+        linecolor='gray',
+        col_linkage=col_linkage,   # Use computed column linkage for ordering
+        row_cluster=False,         # Disable row clustering
+        col_colors=col_colors,     # Add histology annotation on top
+        cbar_kws={'label': 'Log10(Normalized Intensity)', 'shrink': 0.5, 'ticks': [0, 1, 2, 3]},
+        xticklabels=False,
+        yticklabels=False,
+        figsize=(10, 8)
+    )
+    
+    # Hide the dendrogram for rows
+    g.ax_col_dendrogram.set_visible(True)
+    g.ax_row_dendrogram.set_visible(False)
+    
+    # Step 6: Customize labels and colorbar
+    g.ax_heatmap.set_xlabel("Samples", fontsize=12)
+    g.ax_heatmap.set_ylabel("Fusion Genes", fontsize=12)
+    cbar = g.ax_cbar
+    cbar.set_label('Log10(Normalized Intensity)')
+    
+    plt.show()
+    return g
