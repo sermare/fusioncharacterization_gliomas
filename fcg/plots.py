@@ -1275,26 +1275,26 @@ def create_custom_clustermap(heatmap_data_sorted, merged, n_top=50, custom_palet
     plt.show()
     return g
 
-
-def plot_fusion_densities(final_df, chromosome_sizes, label):
+def plot_fusion_densities(positive_set, negative_set, chromosome_sizes, label):
     """
     Processes fusion entries from final_df and plots density curves
-    for test and negative entries using genomic coordinates.
+    for test and negative entries using genomic coordinates, showing difference where test > negative.
 
     Parameters:
         final_df (pd.DataFrame): DataFrame containing fusion data.
-        metadata (pd.DataFrame): Metadata DataFrame (used here if needed for further customization).
         chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (must have columns 'chrom' and 'end').
+        label (str): Label for the plot legend.
 
     The function:
-        - Filters entries based on 'GTEX' and algorithm count columns.
+        - Filters test and negative entries based on GTEX and algorithm count.
         - Computes chromosome offsets and global coordinates.
         - Uses gaussian_kde to compute density curves per chromosome.
-        - Plots density curves for test and negative entries.
+        - Plots density curve of test probabilities minus negative probabilities (where > 0).
     """
+    # Define test and negative entries
 
-    # Define entries from final_df
-    neg_entries = final_df['fg_bk'].unique()
+    neg_entries = negative_set['fg_bk'].unique()
+    test_entries = positive_set['fg_bk'].unique()
 
     # Process chromosome sizes and compute offsets
     chr_lengths = chromosome_sizes.groupby('chrom')['end'].max().reset_index()
@@ -1329,48 +1329,61 @@ def plot_fusion_densities(final_df, chromosome_sizes, label):
                 chrom = chrom1
         return chrom, midpoint
 
-    # Process negative entries
-    data_for_plot_neg = []
-    for entry in neg_entries:
-        chrom, midpoint = parse_genomic_string(entry)
-        if chrom is None:
-            continue
-        data_for_plot_neg.append([chrom, midpoint])
-    df_hits_neg = pd.DataFrame(data_for_plot_neg, columns=['chrom', 'pos'])
-    df_hits_neg = df_hits_neg[df_hits_neg['chrom'].isin(chrom2offset.keys())]
-    df_hits_neg['global_x'] = df_hits_neg.apply(lambda row: chrom2offset[row['chrom']] + row['pos'], axis=1)
+    # Process negative and test entries
+    def process_entries(entries):
+        data_for_plot = []
+        for entry in entries:
+            chrom, midpoint = parse_genomic_string(entry)
+            if chrom is None:
+                continue
+            data_for_plot.append([chrom, midpoint])
+        df_hits = pd.DataFrame(data_for_plot, columns=['chrom', 'pos'])
+        df_hits = df_hits[df_hits['chrom'].isin(chrom2offset.keys())]
+        df_hits['global_x'] = df_hits.apply(lambda row: chrom2offset[row['chrom']] + row['pos'], axis=1)
+        return df_hits
+
+    df_hits_neg = process_entries(neg_entries)
+    df_hits_test = process_entries(test_entries)
 
     # Setup plotting parameters
     plt.figure(figsize=(20, 6))
-    colors = []
-    for i, chrom in enumerate(chr_lengths['chrom']):
-        color = 'blue' if i % 2 == 0 else 'darkblue'
-        colors.append((chrom, color))
+    
+    # Function to compute density
+    def compute_density(df_hits, chrom, x_range):
+        subset = df_hits[df_hits['chrom'] == chrom]
+        if len(subset) < 2:
+            return np.zeros_like(x_range)
+        x_vals = subset['global_x'].values
+        try:
+            kde = gaussian_kde(x_vals, bw_method=0.2)
+            density = kde(x_range)
+            return density
+        except Exception as e:
+            print(f"Skipping density computation for {chrom}: {e}")
+            return np.zeros_like(x_range)
+
+    # Plot density difference
+    for chrom in sorted(chrom2offset.keys()):
+        offset = chrom2offset[chrom]
+        chrom_length = chr_lengths[chr_lengths['chrom'] == chrom]['end'].values[0]
+        x_range = np.linspace(offset, offset + chrom_length, 1000)
         
-    # Function to plot density for a given dataset (df_hits)
-    def plot_density(df_hits, color, label, alpha=0.7, scale_factor=1):
-        for chrom in sorted(df_hits['chrom'].unique()):
-            subset = df_hits[df_hits['chrom'] == chrom]
-            if len(subset) < 2:
-                continue
-            x_vals = subset['global_x'].values
-            try:
-                kde = gaussian_kde(x_vals, bw_method=0.2)
-                offset = chrom2offset[chrom]
-                chrom_length = chr_lengths[chr_lengths['chrom'] == chrom]['end'].values[0]
-                x_range = np.linspace(offset, offset + chrom_length, 1000)
-                density = kde(x_range)
-                scaled_density = density * scale_factor
-                plt.fill_between(
-                    x_range, scaled_density, color=color, alpha=alpha,
-                    label=label if chrom == sorted(df_hits['chrom'].unique())[0] else None
-                )
-                plt.plot(x_range, scaled_density, color='black', linewidth=0.5, alpha=0.7)
-            except Exception as e:
-                print(f"Skipping density plot for {chrom}: {e}")
+        # Compute densities
+        neg_density = compute_density(df_hits_neg, chrom, x_range)
+        test_density = compute_density(df_hits_test, chrom, x_range)
+        
+        # Compute difference (test - negative), set negative values to 0
+        diff_density = test_density - neg_density
+        diff_density = np.where(diff_density > 0, diff_density, 0)
+        
+        if np.max(diff_density) > 0:  # Only plot if there's positive density
+            plt.fill_between(
+                x_range, diff_density, color='red', alpha=0.7,
+                label=label if chrom == sorted(chrom2offset.keys())[0] else None
+            )
+            plt.plot(x_range, diff_density, color='black', linewidth=0.5, alpha=0.7)
 
-    plot_density(df_hits_neg, color='blue', label=label)
-
+    # Add chromosome boundaries and labels
     prev_end = 0
     for i, row in chr_lengths.iterrows():
         chr_end_global = row['offset'] + row['end']
@@ -1381,10 +1394,541 @@ def plot_fusion_densities(final_df, chromosome_sizes, label):
         prev_end = chr_end_global
 
     # Finalize and show the plot
-    # plt.xlabel("Global Genomic Position")
     plt.yticks(fontsize=15)
-    plt.ylabel("Scaled Density", fontsize=15)
-    plt.title("Fusion Density Plot", fontsize=15)
+    plt.ylabel("Scaled Density Difference (Test - Negative)", fontsize=15)
+    plt.title("Fusion Density Difference Plot", fontsize=15)
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+
+def plot_fusion_densities_llr(positive_set, negative_set, chromosome_sizes, label):
+    """
+    Plots fusion event densities using a probabilistic Poisson process framework,
+    highlighting regions where the test set's intensity significantly exceeds the negative set's.
+
+    Parameters:
+        positive_set (pd.DataFrame): Test set DataFrame with fusion data (e.g., 'fg_bk' column).
+        negative_set (pd.DataFrame): Negative set DataFrame with fusion data (e.g., 'fg_bk' column).
+        chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (columns 'chrom' and 'end').
+        label (str): Label for the plot legend.
+
+    The function:
+        - Computes global genomic coordinates for all fusion positions.
+        - Estimates intensity functions using KDE for test and negative sets.
+        - Computes log-likelihood ratio to compare intensities.
+        - Plots regions where test intensity exceeds negative intensity.
+    """
+    # Define test and negative entries
+    neg_entries = negative_set['fg_bk'].unique()
+    test_entries = positive_set['fg_bk'].unique()
+
+    # Process chromosome sizes and compute offsets
+    chr_lengths = chromosome_sizes.groupby('chrom')['end'].max().reset_index()
+    chr_order = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+    chr_lengths = chr_lengths[chr_lengths['chrom'].isin(chr_order)]
+    chr_lengths['chr_num'] = chr_lengths['chrom'].apply(
+        lambda x: (23 if x == 'chrX' else (24 if x == 'chrY' else int(x.replace('chr', ''))))
+    )
+    chr_lengths.sort_values('chr_num', inplace=True)
+    chr_lengths['cum_length'] = chr_lengths['end'].cumsum()
+    chr_lengths['offset'] = chr_lengths['cum_length'] - chr_lengths['end']
+    chrom2offset = dict(zip(chr_lengths['chrom'], chr_lengths['offset']))
+
+    # Parse genomic strings to extract all (chrom, pos) pairs
+    def parse_genomic_string(entry):
+        matches = re.findall(r'(chr[0-9]+):(\d+)', entry) # WE CAN ADD XY eg chr[0-9XY]
+        if not matches:
+            return []
+        positions = [(chrom, int(pos)) for chrom, pos in matches]
+        return positions  # Returns list of (chrom, pos) tuples
+
+    # Process entries into DataFrames
+    def process_entries(entries):
+        data_for_plot = []
+        for entry in entries:
+            positions = parse_genomic_string(entry)
+            for chrom, pos in positions:
+                if chrom in chrom2offset:
+                    data_for_plot.append([chrom, pos])
+        df_hits = pd.DataFrame(data_for_plot, columns=['chrom', 'pos'])
+        df_hits['global_x'] = df_hits.apply(lambda row: chrom2offset[row['chrom']] + row['pos'], axis=1)
+        return df_hits
+
+    df_hits_neg = process_entries(neg_entries)
+    df_hits_test = process_entries(test_entries)
+
+    # Setup plotting
+    plt.figure(figsize=(20, 6))
+
+    # Compute intensity (KDE-based)
+    def compute_intensity(df_hits, chrom, x_range, pseudocount=1e-6):
+        subset = df_hits[df_hits['chrom'] == chrom]
+        if len(subset) < 2:
+            return np.full_like(x_range, pseudocount)
+        x_vals = subset['global_x'].values
+        try:
+            kde = gaussian_kde(x_vals, bw_method=0.2)
+            intensity = kde(x_range)
+            return intensity + pseudocount  # Add pseudocount to avoid zero
+        except Exception as e:
+            print(f"Skipping intensity computation for {chrom}: {e}")
+            return np.full_like(x_range, pseudocount)
+
+    # Plot log-likelihood ratio
+    for chrom in sorted(chrom2offset.keys()):
+        offset = chrom2offset[chrom]
+        chrom_length = chr_lengths[chr_lengths['chrom'] == chrom]['end'].values[0]
+        x_range = np.linspace(offset, offset + chrom_length, 1000)
+
+        # Compute intensities
+        neg_intensity = compute_intensity(df_hits_neg, chrom, x_range)
+        test_intensity = compute_intensity(df_hits_test, chrom, x_range)
+
+        # Compute log-likelihood ratio
+        llr = np.log(test_intensity / neg_intensity)
+
+        # Only plot where test intensity exceeds negative (LLR > 0)
+        significant_llr = np.where(llr > 0, llr, 0)
+        if np.max(significant_llr) > 0:
+            plt.fill_between(
+                x_range, significant_llr, color='red', alpha=0.7,
+                label=label if chrom == sorted(chrom2offset.keys())[0] else None
+            )
+            plt.plot(x_range, significant_llr, color='black', linewidth=0.5, alpha=0.7)
+
+    # Add chromosome boundaries and labels
+    prev_end = 0
+    for i, row in chr_lengths.iterrows():
+        chr_end_global = row['offset'] + row['end']
+        plt.axvline(x=chr_end_global, linestyle='--', linewidth=0.5, color='gray')
+        midpoint = prev_end + (chr_end_global - prev_end) / 2
+        plt.text(midpoint, -0.05 * plt.ylim()[1], row['chrom'].replace('chr', ''),
+                 horizontalalignment='center', verticalalignment='top', fontsize=15)
+        prev_end = chr_end_global
+
+    # Finalize plot
+    plt.yticks(fontsize=15)
+    plt.ylabel("Log-Likelihood Ratio (Test > Negative)", fontsize=15)
+    plt.title("Fusion Intensity Comparison (Poisson Process)", fontsize=15)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def plot_fusion_densities_llr_chr(positive_set, negative_set, chromosome_sizes, label):
+    """
+    Plots fusion event densities using a probabilistic Poisson process framework,
+    normalizing intensities by chromosome length to account for size effects.
+    Highlights regions where the test set's per-unit-length intensity exceeds the negative set's.
+
+    Parameters:
+        positive_set (pd.DataFrame): Test set DataFrame with fusion data (e.g., 'fg_bk' column).
+        negative_set (pd.DataFrame): Negative set DataFrame with fusion data (e.g., 'fg_bk' column).
+        chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (columns 'chrom' and 'end').
+        label (str): Label for the plot legend.
+
+    The function:
+        - Computes global genomic coordinates for all fusion positions.
+        - Estimates intensity functions using KDE, normalized by chromosome length.
+        - Computes log-likelihood ratio to compare normalized intensities.
+        - Plots regions where test intensity exceeds negative intensity.
+    """
+    # Define test and negative entries
+    neg_entries = negative_set['fg_bk'].unique()
+    test_entries = positive_set['fg_bk'].unique()
+
+    # Process chromosome sizes and compute offsets
+    chr_lengths = chromosome_sizes.groupby('chrom')['end'].max().reset_index()
+    chr_order = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+    chr_lengths = chr_lengths[chr_lengths['chrom'].isin(chr_order)]
+    chr_lengths['chr_num'] = chr_lengths['chrom'].apply(
+        lambda x: (23 if x == 'chrX' else (24 if x == 'chrY' else int(x.replace('chr', ''))))
+    )
+    chr_lengths.sort_values('chr_num', inplace=True)
+    chr_lengths['cum_length'] = chr_lengths['end'].cumsum()
+    chr_lengths['offset'] = chr_lengths['cum_length'] - chr_lengths['end']
+    chrom2offset = dict(zip(chr_lengths['chrom'], chr_lengths['offset']))
+    chrom2length = dict(zip(chr_lengths['chrom'], chr_lengths['end']))  # Map chrom to length
+
+    # Parse genomic strings to extract all (chrom, pos) pairs
+    def parse_genomic_string(entry):
+        matches = re.findall(r'(chr[0-9]+):(\d+)', entry)  # Updated to include XY
+        if not matches:
+            return []
+        positions = [(chrom, int(pos)) for chrom, pos in matches]
+        return positions  # Returns list of (chrom, pos) tuples
+
+    # Process entries into DataFrames
+    def process_entries(entries):
+        data_for_plot = []
+        for entry in entries:
+            positions = parse_genomic_string(entry)
+            for chrom, pos in positions:
+                if chrom in chrom2offset:
+                    data_for_plot.append([chrom, pos])
+        df_hits = pd.DataFrame(data_for_plot, columns=['chrom', 'pos'])
+        df_hits['global_x'] = df_hits.apply(lambda row: chrom2offset[row['chrom']] + row['pos'], axis=1)
+        return df_hits
+
+    df_hits_neg = process_entries(neg_entries)
+    df_hits_test = process_entries(test_entries)
+
+    # Setup plotting
+    plt.figure(figsize=(20, 6))
+
+    # Compute normalized intensity (KDE-based)
+    def compute_normalized_intensity(df_hits, chrom, x_range, pseudocount=1e-6):
+        subset = df_hits[df_hits['chrom'] == chrom]
+        if len(subset) < 2:
+            return np.full_like(x_range, pseudocount / chrom2length[chrom])
+        x_vals = subset['global_x'].values
+        try:
+            kde = gaussian_kde(x_vals, bw_method=0.2)
+            intensity = kde(x_range)
+            # Normalize by chromosome length
+            normalized_intensity = (intensity + pseudocount) / chrom2length[chrom]
+            return normalized_intensity
+        except Exception as e:
+            print(f"Skipping intensity computation for {chrom}: {e}")
+            return np.full_like(x_range, pseudocount / chrom2length[chrom])
+
+    # Plot log-likelihood ratio
+    for chrom in sorted(chrom2offset.keys()):
+        offset = chrom2offset[chrom]
+        chrom_length = chr_lengths[chr_lengths['chrom'] == chrom]['end'].values[0]
+        x_range = np.linspace(offset, offset + chrom_length, 1000)
+
+        # Compute normalized intensities
+        neg_intensity = compute_normalized_intensity(df_hits_neg, chrom, x_range)
+        test_intensity = compute_normalized_intensity(df_hits_test, chrom, x_range)
+
+        # Compute log-likelihood ratio
+        llr = np.log(test_intensity / neg_intensity)
+
+        # Only plot where test intensity exceeds negative (LLR > 0)
+        significant_llr = np.where(llr > 0, llr, 0)
+        if np.max(significant_llr) > 0:
+            plt.fill_between(
+                x_range, significant_llr, color='red', alpha=0.7,
+                label=label if chrom == sorted(chrom2offset.keys())[0] else None
+            )
+            plt.plot(x_range, significant_llr, color='black', linewidth=0.5, alpha=0.7)
+
+    # Add chromosome boundaries and labels
+    prev_end = 0
+    for i, row in chr_lengths.iterrows():
+        chr_end_global = row['offset'] + row['end']
+        plt.axvline(x=chr_end_global, linestyle='--', linewidth=0.5, color='gray')
+        midpoint = prev_end + (chr_end_global - prev_end) / 2
+        plt.text(midpoint, -0.05 * plt.ylim()[1], row['chrom'].replace('chr', ''),
+                 horizontalalignment='center', verticalalignment='top', fontsize=15)
+        prev_end = chr_end_global
+
+    # Finalize plot
+    plt.yticks(fontsize=15)
+    plt.ylabel("Log-Likelihood Ratio (Normalized Test > Negative)", fontsize=15)
+    plt.title("Fusion Intensity Comparison (Normalized Poisson Process)", fontsize=15)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+#################################################
+################### NEW ONE #####################
+#################################################
+
+def plot_positive_fusion_histogram(positive_set, chromosome_sizes, bin_size=1e6):
+    """
+    Plots a histogram of fusion events from the positive set, normalized by chromosome length.
+    
+    Parameters:
+        positive_set (pd.DataFrame): Test set DataFrame with fusion data (e.g., 'fg_bk' column).
+        chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (columns 'chrom' and 'end').
+        bin_size (float): Genomic bin size in base pairs (default: 1e6).
+    """
+    # Process chromosome structure
+    chr_lengths = process_chromosomes(chromosome_sizes)
+    chrom2offset = {row['chrom']: row['offset'] for _, row in chr_lengths.iterrows()}
+    chrom2length = {row['chrom']: row['end'] for _, row in chr_lengths.iterrows()}
+
+    # Process fusion data
+    df_pos = process_entries(positive_set['fg_bk'].unique(), chrom2offset)
+
+    # Initialize plot
+    plt.figure(figsize=(20, 6))
+
+    # Chromosome-wise analysis
+    for chrom in chr_lengths['chrom']:
+        offset = chrom2offset[chrom]
+        chrom_length = chr_lengths.loc[chr_lengths['chrom'] == chrom, 'end'].values[0]
+        
+        # Create genomic bins
+        bins = create_bins(offset, chrom_length, bin_size)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        
+        # Count fusions in bins
+        counts = bin_counts(df_pos, chrom, bins)
+        
+        # Normalize by chromosome length (events per base pair)
+        normalized_counts = counts / chrom2length[chrom]
+        
+        # Plot histogram
+        plt.fill_between(bin_centers, normalized_counts, color='blue', alpha=0.7, label='Positive Fusions' if chrom == 'chr1' else "")
+        plt.plot(bin_centers, normalized_counts, color='black', linewidth=0.5, alpha=0.7)
+
+    # Add chromosome boundaries and labels
+    prev_end = 0
+    for _, row in chr_lengths.iterrows():
+        end = row['offset'] + row['end']
+        plt.axvline(end, color='gray', linestyle='--', linewidth=0.5)
+        plt.text((prev_end + end) / 2, -0.05 * plt.ylim()[1], row['chrom'][3:],
+                 ha='center', va='top', fontsize=12)
+        prev_end = end
+    
+    # Finalize plot
+    plt.ylabel('Normalized Fusion Density (Events per bp)', fontsize=14)
+    plt.title('Histogram of Positive Fusion Events by Chromosome', fontsize=16)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def process_chromosomes(chromosome_sizes):
+    """Process chromosome structure with genomic offsets"""
+    chr_order = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+    chr_lengths = (
+        chromosome_sizes
+        .groupby('chrom')['end'].max()
+        .reset_index()
+        .assign(chr_num=lambda df: df['chrom'].map(chrom_to_num))
+        .sort_values('chr_num')
+        .assign(cum_length=lambda df: df['end'].cumsum())
+        .assign(offset=lambda df: df['cum_length'] - df['end'])
+    )
+    return chr_lengths[chr_lengths['chrom'].isin(chr_order)]
+
+def chrom_to_num(c):
+    """Convert chromosome name to numeric order"""
+    return 23 if c == 'chrX' else 24 if c == 'chrY' else int(c[3:])
+
+def process_entries(entries, chrom2offset):
+    """Process fusion entries into global coordinates"""
+    data = []
+    for entry in entries:
+        for chrom, pos in parse_genomic_string(entry):
+            if chrom in chrom2offset:
+                data.append([chrom, pos, chrom2offset[chrom] + pos])
+    return pd.DataFrame(data, columns=['chrom', 'pos', 'global_x'])
+
+def parse_genomic_string(entry):
+    """Parse genomic coordinates with chromosome validation"""
+    return [(m[0], int(m[1])) for m in re.findall(r'(chr[\dXY]+):(\d+)', entry)]
+
+def create_bins(offset, length, bin_size):
+    """Create genomic bins"""
+    num_bins = int(np.ceil(length / bin_size)) + 1
+    return np.linspace(offset, offset + length, num_bins)
+
+def bin_counts(df, chrom, bins):
+    """Count fusions in bins using histogram"""
+    if df.empty or df[df['chrom'] == chrom].empty:
+        return np.zeros(len(bins) - 1, dtype=float)
+    
+    # Filter data for the current chromosome
+    subset = df[df['chrom'] == chrom]
+    x_vals = subset['global_x'].values
+    
+    # Use histogram for exact counts
+    counts, _ = np.histogram(x_vals, bins=bins)
+    return counts
+
+# Example usage:
+# positive_set = pd.DataFrame({'fg_bk': ['chr1:1000', 'chr2:2000', 'chr1:1500']})
+# chromosome_sizes = pd.DataFrame({'chrom': ['chr1', 'chr2'], 'end': [249250621, 243199373]})
+# plot_positive_fusion_histogram(positive_set, chromosome_sizes, bin_size=1e6)
+
+#################################################
+################### NEW ONE #####################
+#################################################
+
+import pandas as pd
+import numpy as np
+from scipy.stats import gaussian_kde, nbinom, chi2
+from statsmodels.stats.multitest import fdrcorrection
+import matplotlib.pyplot as plt
+import re
+
+def plot_fusion_densities_llr_corr(positive_set, negative_set, chromosome_sizes, label, bin_size=1e6, alpha=0.05):
+    """
+    Enhanced fusion analysis with Negative Binomial modeling and FDR control.
+    
+    Parameters:
+        positive_set (pd.DataFrame): Test set DataFrame with fusion data (e.g., 'fg_bk' column).
+        negative_set (pd.DataFrame): Negative set DataFrame with fusion data (e.g., 'fg_bk' column).
+        chromosome_sizes (pd.DataFrame): DataFrame with chromosome sizes (columns 'chrom' and 'end').
+        label (str): Label for the plot legend.
+        bin_size (float): Genomic bin size in base pairs (default: 1e6).
+        alpha (float): False discovery rate threshold (default: 0.05).
+    """
+    # Process chromosome structure
+    chr_lengths = process_chromosomes(chromosome_sizes)
+    chrom2offset = {row['chrom']: row['offset'] for _, row in chr_lengths.iterrows()}
+
+    # Process fusion data
+    df_neg = process_entries(negative_set['fg_bk'].unique(), chrom2offset)
+    df_test = process_entries(positive_set['fg_bk'].unique(), chrom2offset)
+
+    # Initialize plot
+    plt.figure(figsize=(20, 6))
+    all_llrs = []
+    all_positions = []
+    all_pvals = []
+
+    # Chromosome-wise analysis
+    for chrom in chr_lengths['chrom']:
+        offset = chrom2offset[chrom]
+        chrom_length = chr_lengths.loc[chr_lengths['chrom'] == chrom, 'end'].values[0]
+        
+        # Create genomic bins
+        bins = create_bins(offset, chrom_length, bin_size)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        
+        # Count fusions in bins
+        neg_counts = bin_counts(df_neg, chrom, bins)
+        test_counts = bin_counts(df_test, chrom, bins)
+        
+        # NB model fitting with regularization
+        llrs, pvals = fit_nb_model(test_counts, neg_counts)
+        
+        # Store for FDR correction
+        all_llrs.extend(llrs)
+        all_positions.extend([(chrom, center) for center in bin_centers])
+        all_pvals.extend(pvals)
+        
+        # Plot temporary results
+        plot_chromosome_results(bin_centers, llrs, chrom, offset, chrom_length)
+
+    # Genome-wide FDR correction
+    significant = apply_fdr_correction(all_llrs, all_positions, all_pvals, alpha)
+    
+    # Final plotting of significant regions
+    plot_significant_regions(significant)
+    finalize_plot(chr_lengths, label)
+    plt.show()
+
+def process_chromosomes(chromosome_sizes):
+    """Process chromosome structure with genomic offsets"""
+    chr_order = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+    chr_lengths = (
+        chromosome_sizes
+        .groupby('chrom')['end'].max()
+        .reset_index()
+        .assign(chr_num=lambda df: df['chrom'].map(chrom_to_num))
+        .sort_values('chr_num')
+        .assign(cum_length=lambda df: df['end'].cumsum())
+        .assign(offset=lambda df: df['cum_length'] - df['end'])
+    )
+    return chr_lengths[chr_lengths['chrom'].isin(chr_order)]
+
+def chrom_to_num(c):
+    """Convert chromosome name to numeric order"""
+    return 23 if c == 'chrX' else 24 if c == 'chrY' else int(c[3:])
+
+def process_entries(entries, chrom2offset):
+    """Process fusion entries into global coordinates"""
+    data = []
+    for entry in entries:
+        for chrom, pos in parse_genomic_string(entry):
+            if chrom in chrom2offset:
+                data.append([chrom, pos, chrom2offset[chrom] + pos])
+    return pd.DataFrame(data, columns=['chrom', 'pos', 'global_x'])
+
+def parse_genomic_string(entry):
+    """Parse genomic coordinates with chromosome validation"""
+    return [(m[0], int(m[1])) for m in re.findall(r'(chr[\dXY]+):(\d+)', entry)]
+
+def create_bins(offset, length, bin_size):
+    """Create genomic bins"""
+    num_bins = int(np.ceil(length / bin_size)) + 1
+    return np.linspace(offset, offset + length, num_bins)
+
+def bin_counts(df, chrom, bins):
+    """Count fusions in bins using histogram"""
+    if df.empty or df[df['chrom'] == chrom].empty:
+        return np.zeros(len(bins) - 1, dtype=float)
+    
+    # Filter data for the current chromosome
+    subset = df[df['chrom'] == chrom]
+    x_vals = subset['global_x'].values
+    
+    # Use histogram for exact counts
+    counts, _ = np.histogram(x_vals, bins=bins)
+    
+    # Optional: Smooth with KDE by evaluating at bin centers
+    if len(x_vals) > 1:
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        kde = gaussian_kde(x_vals, bw_method='silverman')
+        smoothed_counts = kde(bin_centers) * len(x_vals) * (bins[1] - bins[0])  # Scale by bin width
+        counts = counts + smoothed_counts  # Combine raw and smoothed
+    
+    return np.maximum(counts, 1e-6)  # Regularization to avoid zero counts
+
+def fit_nb_model(test_counts, neg_counts):
+    """Negative Binomial regression with dispersion estimation"""
+    # Regularize zero counts
+    test_counts = test_counts + 1e-3
+    neg_counts = neg_counts + 1e-3
+    
+    # Estimate NB parameters
+    mu = test_counts.mean()
+    var = test_counts.var()
+    dispersion = max((var - mu) / mu**2, 1e-3)  # Ensure positive dispersion
+    
+    # Calculate LLR using NB likelihood
+    llr = (nbinom.logpmf(test_counts.astype(int), 1/dispersion, 1/(1 + dispersion * neg_counts)) -
+           nbinom.logpmf(test_counts.astype(int), 1/dispersion, 1/(1 + dispersion * test_counts)))
+    
+    # Convert to p-values using chi-squared approximation (1 degree of freedom)
+    pvals = 0.5 * (1 - chi2.cdf(2 * llr, 1))
+    return llr, pvals
+
+def apply_fdr_correction(all_llrs, all_positions, all_pvals, alpha):
+    """Apply Benjamini-Hochberg FDR correction"""
+    # Apply FDR correction, expecting two return values
+    rejected, pvals_corrected = fdrcorrection(all_pvals, alpha=alpha)
+    return {
+        pos: llr 
+        for (pos, llr), reject in zip(zip(all_positions, all_llrs), rejected)
+        if reject
+    }
+
+def plot_chromosome_results(bin_centers, llrs, chrom, offset, chrom_length):
+    """Plot temporary LLR results for a chromosome"""
+    # Only plot positive LLRs for visual consistency
+    significant_llrs = np.where(llrs > 0, llrs, 0)
+    plt.fill_between(bin_centers, significant_llrs, color='red', alpha=0.3, label=chrom if chrom == 'chr1' else "")
+    plt.plot(bin_centers, significant_llrs, color='black', linewidth=0.5, alpha=0.7)
+
+def plot_significant_regions(significant):
+    """Plot FDR-corrected significant regions"""
+    for (chrom, x), llr in significant.items():
+        plt.plot([x], [llr], 'r.', markersize=5, alpha=0.7)
+
+def finalize_plot(chr_lengths, label):
+    """Add final plot elements"""
+    # Chromosome boundaries and labels
+    prev_end = 0
+    for _, row in chr_lengths.iterrows():
+        end = row['offset'] + row['end']
+        plt.axvline(end, color='gray', linestyle='--', linewidth=0.5)
+        plt.text((prev_end + end) / 2, -0.05 * plt.ylim()[1], row['chrom'][3:],
+                 ha='center', va='top', fontsize=12)
+        prev_end = end
+    
+    plt.ylabel('Negative Binomial LLR (FDR-corrected)', fontsize=14)
+    plt.title('Genome-wide Fusion Enrichment Analysis', fontsize=16)
+    plt.legend([label])
+    plt.tight_layout()
+
+# Example usage:
+# positive_set = pd.DataFrame({'fg_bk': ['chr1:1000', 'chr2:2000']})
+# negative_set = pd.DataFrame({'fg_bk': ['chr1:1500']})
+# chromosome_sizes = pd.DataFrame({'chrom': ['chr1', 'chr2'], 'end': [249250621, 243199373]})
+# plot_fusion_densities_llr_corr(positive_set, negative_set, chromosome_sizes, label="Test Fusions")
