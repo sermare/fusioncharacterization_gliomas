@@ -8,6 +8,7 @@ CYTOBAND_FILE = "~/cytoBand.txt"
 PURITY_SCORES = "~/jupyter-notebooks/14112024_purity_scores.csv"
 GTEX_FUSIONS_OLD = "/c4/home/sermare/jupyter-notebooks/old_notebooks/GTEX_fusions.csv"
 GTEX_FUSIONS_NEW = "/c4/home/sermare/random_tsv_files/GTEX_TCGA_fusion_inspector.csv"
+COSMIC_TABLE = '/c4/home/sermare/fusioncharacterization_gliomas/fcg/tables/Cosmic_Fusion_v101_GRCh38.tsv'
 
 # Gene annotations
 CENSUS_ONCOGENES = "~/random_tsv_files/Census_allWed Mar 15 21_17_28 2023.tsv"

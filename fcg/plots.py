@@ -1635,7 +1635,7 @@ def plot_fusion_densities_llr_chr(positive_set, negative_set, chromosome_sizes, 
 ################### NEW ONE #####################
 #################################################
 
-def plot_positive_fusion_histogram(positive_set, chromosome_sizes, bin_size=1e6):
+def plot_positive_fusion_histogram(positive_set, chromosome_sizes, bin_size=1e6, title = 'Title'):
     """
     Plots a histogram of fusion events from the positive set, normalized by chromosome length.
     
@@ -1685,7 +1685,7 @@ def plot_positive_fusion_histogram(positive_set, chromosome_sizes, bin_size=1e6)
     
     # Finalize plot
     plt.ylabel('Normalized Fusion Density (Events per bp)', fontsize=14)
-    plt.title('Histogram of Positive Fusion Events by Chromosome', fontsize=16)
+    plt.title(f'Histogram of Fusion Events by Chromosome in {title}', fontsize=16)
     plt.legend()
     plt.tight_layout()
     plt.show()
